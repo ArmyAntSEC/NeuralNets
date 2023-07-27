@@ -10,6 +10,7 @@ eval_interval = 300
 learning_rate = 1e-2
 device = 'cpu'
 eval_iters = 200
+n_embed = 32
 
 torch.manual_seed(42)
 
@@ -58,13 +59,19 @@ def estimate_loss():
 
 class BigramLanguageModel(nn.Module):
 
-    def __init__(self,vocab_size):
+    def __init__(self):
         super().__init__()
-        self.token_embedding_table = nn.Embedding(vocab_size,vocab_size)
+        self.token_embedding_table = nn.Embedding(vocab_size,n_embed)
+        self.position_embedding_table = nn.Embedding(block_size,n_embed)
+        self.lm_head = nn.Linear(n_embed,vocab_size)
     
     def forward(self, idx, targets=None):
+        B,T = idx.shape
+        tok_emb = self.token_embedding_table(idx)
+        pos_emb = self.position_embedding_table(torch.arange(T,device=device))
+        x = tok_emb + pos_emb
+        logits = self.lm_head(x)
         
-        logits = self.token_embedding_table(idx)
         if targets == None:
             loss = None
         else:
@@ -86,13 +93,13 @@ class BigramLanguageModel(nn.Module):
         return idx
     
 
-model = BigramLanguageModel(vocab_size)
+model = BigramLanguageModel()
 m = model.to(device)
 xb,yb = get_batch('train')
 logits,loss = m(xb,yb)
 print(logits.shape)
-print(loss)
-print(decode(m.generate(torch.zeros((1,1), dtype=torch.long), max_new_tokens=100)[0].tolist()))
+print(loss.item())
+print(decode(m.generate(torch.zeros((1,1), dtype=torch.long), max_new_tokens=8)[0].tolist()))
 
 # Optimize
 optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
@@ -112,4 +119,7 @@ for iter in range(max_iters):
 
 print(loss.item())
 context = torch.zeros((1,1),dtype=torch.long, device=device)
-print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
+print(decode(m.generate(context, max_new_tokens=8)[0].tolist()))
+
+
+# https://youtu.be/kCc8FmEb1nY?t=4751
