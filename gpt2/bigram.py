@@ -5,9 +5,9 @@ from torch.nn import functional as F
 # Hyperparameters
 batch_size = 32
 block_size = 8
-max_iters = 3000
+max_iters = 5000
 eval_interval = 300
-learning_rate = 1e-2
+learning_rate = 1e-3
 device = 'cpu'
 eval_iters = 200
 n_embed = 32
@@ -57,19 +57,44 @@ def estimate_loss():
     model.train()
     return out
 
+# One head of self-attention
+class Head(nn.Module):
+    def __init__(self, head_size):
+        super().__init__()
+        self.key = nn.Linear(n_embed, head_size, bias=False)
+        self.query = nn.Linear(n_embed, head_size, bias=False)
+        self.value = nn.Linear(n_embed, head_size, bias=False)
+        self.register_buffer('tril', torch.tril(torch.ones(block_size, block_size)))
+    
+    def forward(self, x):
+        B,T,C = x.shape
+        k = self.key(x)
+        q = self.query(x)
+        # Compute attention scores
+        wei = q @ k.transpose(-2,-1) * C**-0.5
+        wei = wei.masked_fill(self.tril[:T,:T] == 0, float('-inf'))
+        wei = F.softmax(wei, dim=1)
+        # Weighted aggregation
+        v = self.value(x)
+        out = wei @ v
+        return out
+
+
 class BigramLanguageModel(nn.Module):
 
     def __init__(self):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size,n_embed)
         self.position_embedding_table = nn.Embedding(block_size,n_embed)
-        self.lm_head = nn.Linear(n_embed,vocab_size)
+        self.sa_head = Head(n_embed)        
+        self.lm_head = nn.Linear(n_embed,vocab_size)        
     
     def forward(self, idx, targets=None):
         B,T = idx.shape
         tok_emb = self.token_embedding_table(idx)
         pos_emb = self.position_embedding_table(torch.arange(T,device=device))
         x = tok_emb + pos_emb
+        x = self.sa_head(x)
         logits = self.lm_head(x)
         
         if targets == None:
@@ -85,7 +110,8 @@ class BigramLanguageModel(nn.Module):
     def generate(self, idx, max_new_tokens):
         # idx is (B,T)
         for _ in range(max_new_tokens):
-            logits,loss = self(idx)
+            idx_cond = idx[:, -block_size:]
+            logits,loss = self(idx_cond)
             logits = logits[:,-1,:]
             probs = F.softmax(logits,dim=1)
             idx_next = torch.multinomial(probs,num_samples=1) #8,1
@@ -99,7 +125,7 @@ xb,yb = get_batch('train')
 logits,loss = m(xb,yb)
 print(logits.shape)
 print(loss.item())
-print(decode(m.generate(torch.zeros((1,1), dtype=torch.long), max_new_tokens=8)[0].tolist()))
+print(decode(m.generate(torch.zeros((1,1), dtype=torch.long), max_new_tokens=100)[0].tolist()))
 
 # Optimize
 optimizer = torch.optim.AdamW(m.parameters(), lr=learning_rate)
@@ -119,7 +145,7 @@ for iter in range(max_iters):
 
 print(loss.item())
 context = torch.zeros((1,1),dtype=torch.long, device=device)
-print(decode(m.generate(context, max_new_tokens=8)[0].tolist()))
+print(decode(m.generate(context, max_new_tokens=500)[0].tolist()))
 
 
 # https://youtu.be/kCc8FmEb1nY?t=4751
